@@ -1,0 +1,175 @@
+import { NextRequest, NextResponse } from 'next/server'
+import { v0 } from 'v0-sdk'
+
+export async function GET(
+  request: NextRequest,
+  { params }: { params: Promise<{ chatId: string }> },
+) {
+  try {
+    const { chatId } = await params
+
+    if (!chatId) {
+      return NextResponse.json(
+        { error: 'Chat ID is required' },
+        { status: 400 },
+      )
+    }
+
+    // Get chat data from v0
+    const chat = await v0.chats.getById({ chatId })
+
+    // Extract code files from the chat messages
+    const codeFiles = []
+    
+    if (chat.messages) {
+      for (const message of chat.messages) {
+        // Look for experimental_content which contains the generated code
+        if (message.experimental_content) {
+          const content = message.experimental_content
+          
+          // Parse the experimental content to extract code files
+          if (typeof content === 'string') {
+            // Try to parse as JSON first
+            try {
+              const parsed = JSON.parse(content)
+              if (parsed.files && Array.isArray(parsed.files)) {
+                for (const file of parsed.files) {
+                  if (file.name && file.content) {
+                    codeFiles.push({
+                      name: file.name,
+                      content: file.content,
+                      language: file.language || 'text'
+                    })
+                  }
+                }
+              }
+            } catch {
+              // If not JSON, try to extract code blocks from markdown
+              const codeBlocks = extractCodeBlocks(content)
+              codeFiles.push(...codeBlocks)
+            }
+          } else if (typeof content === 'object' && content.files) {
+            // Direct object with files property
+            for (const file of content.files) {
+              if (file.name && file.content) {
+                codeFiles.push({
+                  name: file.name,
+                  content: file.content,
+                  language: file.language || 'text'
+                })
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // If no code files found in experimental_content, try to extract from regular content
+    if (codeFiles.length === 0 && chat.messages) {
+      for (const message of chat.messages) {
+        if (message.content && typeof message.content === 'string') {
+          const codeBlocks = extractCodeBlocks(message.content)
+          codeFiles.push(...codeBlocks)
+        }
+      }
+    }
+
+    // If still no files, create a default HTML file from the demo URL
+    if (codeFiles.length === 0) {
+      codeFiles.push({
+        name: 'index.html',
+        content: generateDefaultHTML(chat.demo || ''),
+        language: 'html'
+      })
+    }
+
+    return NextResponse.json(codeFiles)
+  } catch (error) {
+    console.error('Error fetching code files:', error)
+    return NextResponse.json(
+      { error: 'Failed to fetch code files' },
+      { status: 500 },
+    )
+  }
+}
+
+// Helper function to extract code blocks from markdown content
+function extractCodeBlocks(content: string) {
+  const codeFiles = []
+  const codeBlockRegex = /```(\w+)?\n([\s\S]*?)```/g
+  let match
+  let fileIndex = 1
+
+  while ((match = codeBlockRegex.exec(content)) !== null) {
+    const language = match[1] || 'text'
+    const code = match[2]
+    
+    // Determine file extension based on language
+    const extension = getFileExtension(language)
+    const fileName = `file${fileIndex}.${extension}`
+    
+    codeFiles.push({
+      name: fileName,
+      content: code,
+      language: language
+    })
+    
+    fileIndex++
+  }
+
+  return codeFiles
+}
+
+// Helper function to get file extension from language
+function getFileExtension(language: string): string {
+  const extensionMap: { [key: string]: string } = {
+    'javascript': 'js',
+    'jsx': 'jsx',
+    'typescript': 'ts',
+    'tsx': 'tsx',
+    'html': 'html',
+    'css': 'css',
+    'scss': 'scss',
+    'sass': 'sass',
+    'json': 'json',
+    'markdown': 'md',
+    'python': 'py',
+    'java': 'java',
+    'cpp': 'cpp',
+    'c': 'c',
+    'php': 'php',
+    'ruby': 'rb',
+    'go': 'go',
+    'rust': 'rs',
+    'vue': 'vue',
+    'svelte': 'svelte'
+  }
+  
+  return extensionMap[language] || 'txt'
+}
+
+// Helper function to generate default HTML content
+function generateDefaultHTML(demoUrl: string): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Generated Component</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body>
+    <div class="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div class="text-center">
+            <h1 class="text-2xl font-bold text-gray-900 mb-4">Generated Component</h1>
+            <p class="text-gray-600 mb-4">This component was generated by v0</p>
+            <a href="${demoUrl}" target="_blank" class="inline-block bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 transition-colors">
+                View Live Demo
+            </a>
+        </div>
+    </div>
+</body>
+</html>`
+}
+
+
